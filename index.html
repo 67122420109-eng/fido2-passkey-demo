@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ระบบยืนยันตัวตนไร้รหัสผ่าน (FIDO2 / WebAuthn Demo)</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-slate-100 min-h-screen flex items-center justify-center p-4">
+
+  <div class="bg-white rounded-2xl shadow-xl w-full max-w-md p-8">
+    <h1 class="text-2xl font-bold text-center text-slate-800 mb-2">FIDO2 Passwordless</h1>
+    <p class="text-sm text-center text-slate-500 mb-6">ระบบยืนยันตัวตนไร้รหัสผ่านด้วย WebAuthn</p>
+
+    <!-- Tab Switcher -->
+    <div class="flex border-b border-slate-200 mb-6" id="tab-group">
+      <button onclick="switchTab('register')" id="tab-reg" class="w-1/2 py-2 font-medium text-indigo-600 border-b-2 border-indigo-600">สมัครสมาชิก</button>
+      <button onclick="switchTab('login')" id="tab-login" class="w-1/2 py-2 font-medium text-slate-500 hover:text-slate-700">เข้าสู่ระบบ</button>
+    </div>
+
+    <!-- Registration Form -->
+    <form id="reg-form" onsubmit="handleRegister(event)" class="space-y-4">
+      <div>
+        <label class="block text-sm font-medium text-slate-700">Username</label>
+        <input type="text" id="reg-username" required class="mt-1 w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:outline-none">
+      </div>
+      <div class="grid grid-cols-2 gap-3">
+        <div>
+          <label class="block text-sm font-medium text-slate-700">ชื่อจริง</label>
+          <input type="text" id="reg-firstname" required class="mt-1 w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:outline-none">
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-slate-700">นามสกุล</label>
+          <input type="text" id="reg-lastname" required class="mt-1 w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:outline-none">
+        </div>
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-slate-700">หมายเลขโทรศัพท์</label>
+        <input type="tel" id="reg-phone" required class="mt-1 w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:outline-none">
+      </div>
+      <button type="submit" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-medium py-2.5 rounded-lg transition-colors flex items-center justify-center gap-2">
+        <span>🔒</span> ลงทะเบียนด้วย Touch ID / Face ID / PIN
+      </button>
+    </form>
+
+    <!-- Login Form -->
+    <form id="login-form" onsubmit="handleLogin(event)" class="space-y-4 hidden">
+      <div>
+        <label class="block text-sm font-medium text-slate-700">Username</label>
+        <input type="text" id="login-username" required class="mt-1 w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:outline-none">
+      </div>
+      <button type="submit" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-medium py-2.5 rounded-lg transition-colors flex items-center justify-center gap-2">
+        <span>🔑</span> ยืนยันตัวตนด้วย FIDO2
+      </button>
+    </form>
+
+    <!-- Dashboard (Success Screen) -->
+    <div id="dashboard" class="hidden text-center space-y-4">
+      <div class="text-5xl">🎉</div>
+      <h2 class="text-xl font-bold text-slate-800">เข้าสู่ระบบสำเร็จ!</h2>
+      <div class="bg-slate-50 p-4 rounded-xl text-left space-y-2 border border-slate-200">
+        <p class="text-slate-600"><span class="font-semibold text-slate-800">ชื่อ-นามสกุล:</span> <span id="dash-fullname"></span></p>
+        <p class="text-slate-600"><span class="font-semibold text-slate-800">เบอร์โทรศัพท์:</span> <span id="dash-phone"></span></p>
+        <p class="text-slate-600"><span class="font-semibold text-slate-800">Username:</span> <span id="dash-username"></span></p>
+      </div>
+      <button onclick="logout()" class="w-full border border-slate-300 text-slate-600 hover:bg-slate-50 font-medium py-2 rounded-lg transition-colors">
+        ออกจากระบบ
+      </button>
+    </div>
+
+    <!-- Alert / Status Message -->
+    <div id="msg" class="mt-4 p-3 rounded-lg text-sm text-center hidden"></div>
+  </div>
+
+  <script>
+    function bufferToBase64(buffer) {
+      return btoa(String.fromCharCode(...new Uint8Array(buffer)))
+        .replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "");
+    }
+    function base64ToBuffer(base64) {
+      const padding = '='.repeat((4 - base64.length % 4) % 4);
+      const base64Standard = (base64 + padding).replace(/-/g, '+').replace(/_/g, '/');
+      const rawData = window.atob(base64Standard);
+      return Uint8Array.from([...rawData].map(c => c.charCodeAt(0))).buffer;
+    }
+
+    function showMsg(text, isError = false) {
+      const msg = document.getElementById('msg');
+      msg.textContent = text;
+      msg.className = `mt-4 p-3 rounded-lg text-sm text-center ${isError ? 'bg-red-100 text-red-700' : 'bg-emerald-100 text-emerald-700'}`;
+    }
+
+    function switchTab(tab) {
+      document.getElementById('reg-form').classList.toggle('hidden', tab !== 'register');
+      document.getElementById('login-form').classList.toggle('hidden', tab !== 'login');
+      document.getElementById('tab-reg').className = tab === 'register' ? 'w-1/2 py-2 font-medium text-indigo-600 border-b-2 border-indigo-600' : 'w-1/2 py-2 font-medium text-slate-500 hover:text-slate-700';
+      document.getElementById('tab-login').className = tab === 'login' ? 'w-1/2 py-2 font-medium text-indigo-600 border-b-2 border-indigo-600' : 'w-1/2 py-2 font-medium text-slate-500 hover:text-slate-700';
+      document.getElementById('msg').classList.add('hidden');
+    }
+
+    async function handleRegister(e) {
+      e.preventDefault();
+      const username = document.getElementById('reg-username').value.trim();
+      const firstName = document.getElementById('reg-firstname').value.trim();
+      const lastName = document.getElementById('reg-lastname').value.trim();
+      const phone = document.getElementById('reg-phone').value.trim();
+
+      if (!window.PublicKeyCredential) {
+        return showMsg("อุปกรณ์หรือเบราว์เซอร์นี้ไม่รองรับ WebAuthn / FIDO2", true);
+      }
+
+      try {
+        const userId = new TextEncoder().encode(username);
+        const challenge = window.crypto.getRandomValues(new Uint8Array(32));
+
+        const createCredentialOptions = {
+          publicKey: {
+            challenge: challenge,
+            rp: { name: "FIDO2 Assignment WebApp" },
+            user: {
+              id: userId,
+              name: username,
+              displayName: `${firstName} ${lastName}`
+            },
+            pubKeyCredParams: [
+              { alg: -7, type: "public-key" },
+              { alg: -257, type: "public-key" }
+            ],
+            authenticatorSelection: { userVerification: "preferred" },
+            timeout: 60000
+          }
+        };
+
+        const credential = await navigator.credentials.create(createCredentialOptions);
+        const credentialId = bufferToBase64(credential.rawId);
+
+        const userData = { username, firstName, lastName, phone, credentialId };
+        localStorage.setItem(`fido2_user_${username}`, JSON.stringify(userData));
+        showMsg("สมัครสมาชิกและบันทึก Passkey เรียบร้อยแล้ว! ลองเข้าสู่ระบบได้เลย");
+        setTimeout(() => switchTab('login'), 1500);
+
+      } catch (err) {
+        console.error(err);
+        showMsg("การสร้าง Credential ล้มเหลว หรือถูกยกเลิก: " + err.message, true);
+      }
+    }
+
+    async function handleLogin(e) {
+      e.preventDefault();
+      const username = document.getElementById('login-username').value.trim();
+      const userRaw = localStorage.getItem(`fido2_user_${username}`);
+
+      if (!userRaw) {
+        return showMsg("ไม่พบ Username นี้ในระบบ กรุณาสมัครสมาชิกก่อน", true);
+      }
+
+      const userData = JSON.parse(userRaw);
+
+      try {
+        const challenge = window.crypto.getRandomValues(new Uint8Array(32));
+        const allowCredentialId = base64ToBuffer(userData.credentialId);
+
+        const getCredentialOptions = {
+          publicKey: {
+            challenge: challenge,
+            allowCredentials: [{ id: allowCredentialId, type: 'public-key' }],
+            userVerification: "preferred",
+            timeout: 60000
+          }
+        };
+
+        const assertion = await navigator.credentials.get(getCredentialOptions);
+
+        if (assertion) {
+          document.getElementById('reg-form').classList.add('hidden');
+          document.getElementById('login-form').classList.add('hidden');
+          document.getElementById('tab-group').classList.add('hidden');
+          document.getElementById('msg').classList.add('hidden');
+
+          document.getElementById('dash-fullname').textContent = `${userData.firstName} ${userData.lastName}`;
+          document.getElementById('dash-phone').textContent = userData.phone;
+          document.getElementById('dash-username').textContent = userData.username;
+
+          document.getElementById('dashboard').classList.remove('hidden');
+        }
+      } catch (err) {
+        console.error(err);
+        showMsg("การยืนยันตัวตนล้มเหลว หรือถูกยกเลิก: " + err.message, true);
+      }
+    }
+
+    function logout() {
+      document.getElementById('dashboard').classList.add('hidden');
+      document.getElementById('tab-group').classList.remove('hidden');
+      switchTab('login');
+    }
+  </script>
+</body>
+</html>
